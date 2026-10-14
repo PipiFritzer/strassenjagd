@@ -1,0 +1,132 @@
+/* Layout: header, then one working area. During hunt and review the Street View
+   viewer takes the main column and a sidebar holds terms or votes. */
+:root {
+  --bg: #e9ecef;
+  --surface: #ffffff;
+  --ink: #15191e;
+  --muted: #59626d;
+  --line: #c9cfd6;
+  --sign: #f5c400;
+  --sign-ink: #111111;
+  --route: #1f5fbf;
+  --route-ink: #ffffff;
+  --ok: #1d7a46;
+  --bad: #b3261e;
+  --star: #c27a00;
+  --font-display: "Overpass", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-mono: "Overpass Mono", ui-monospace, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #13171c; --surface: #1d232a; --ink: #e8ecf0; --muted: #9aa5b1; --line: #33404c;
+    --route: #6ea1f2; --route-ink: #0b1220; --ok: #4cc283; --bad: #f2867c; --star: #f5b941;
+    color-scheme: dark;
+  }
+}
+
+* { box-sizing: border-box }
+html, body { margin: 0 }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5 }
+.wrap { max-width: 1280px; margin: 0 auto; padding-inline: 16px; padding-block: 16px 48px; display: flex; flex-direction: column; gap: 20px }
+#main, #screen { display: flex; flex-direction: column; gap: 20px; min-width: 0 }
+[hidden] { display: none !important }
+
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.1 }
+h1 { font-weight: 900; font-size: clamp(2rem, 6vw, 3.2rem); letter-spacing: -0.02em }
+h2 { font-weight: 800; font-size: 1.4rem }
+h3 { font-weight: 800; font-size: 1.05rem }
+p { margin: 0; max-width: 65ch }
+.muted { color: var(--muted) }
+.label { font-family: var(--font-display); font-weight: 800; font-size: .75rem; letter-spacing: .1em; text-transform: uppercase; color: var(--muted) }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums }
+
+header.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px }
+.brand { display: flex; flex-direction: column; gap: 6px }
+.road { height: 10px; width: 180px; max-width: 100%; background: repeating-linear-gradient(90deg, var(--sign) 0 26px, transparent 26px 40px); border-radius: 2px }
+.mode { font-size: .85rem; padding: 4px 10px; border: 1.5px solid var(--line); border-radius: 999px; color: var(--muted) }
+.mode.online { border-color: var(--ok); color: var(--ok) }
+.mode.error { border-color: var(--bad); color: var(--bad) }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 16px; min-width: 0 }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; align-items: start }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 150px }
+label.lbl { font-weight: 700; font-size: .9rem }
+input[type=text], select { font: inherit; padding: 9px 11px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); width: 100%; min-width: 0 }
+input.code { font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .15em }
+:focus-visible { outline: 3px solid var(--route); outline-offset: 2px }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: .95rem }
+
+button { font: inherit; font-family: var(--font-display); font-weight: 800; cursor: pointer; border-radius: 8px; border: 2px solid var(--ink); background: var(--surface); color: var(--ink); padding: 9px 16px; line-height: 1.2 }
+button.primary { background: var(--route); border-color: var(--route); color: var(--route-ink) }
+button.sign { background: var(--sign); border-color: var(--sign-ink); color: var(--sign-ink) }
+button.small { padding: 5px 10px; font-size: .85rem; border-width: 1.5px }
+button.ghost { border-color: var(--line); color: var(--muted); background: transparent }
+button:disabled { opacity: .45; cursor: not-allowed }
+a { color: var(--route) }
+
+/* Term sign, styled after a yellow town-entry sign */
+.ort { background: var(--sign); color: var(--sign-ink); border-radius: 8px; padding: 4px }
+.ort > div { border: 2.5px solid var(--sign-ink); border-radius: 5px; padding: 8px 12px; font-family: var(--font-display); font-weight: 800; font-size: 1.05rem; line-height: 1.2; text-align: center; text-wrap: balance }
+.ort small { display: block; font-weight: 600; font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 2px }
+.ort.big > div { font-size: 1.35rem; padding: 12px 16px }
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; border: 1.5px solid var(--line); font-size: .88rem }
+.chip .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--line) }
+.chip.done { border-color: var(--ok) }
+.chip.done .dot { background: var(--ok) }
+.chip.me { font-weight: 700 }
+
+.status { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 20px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px }
+.timer { font-family: var(--font-mono); font-weight: 700; font-size: 1.7rem; font-variant-numeric: tabular-nums }
+.timer.late { color: var(--bad) }
+.share { display: flex; flex-wrap: wrap; gap: 8px; align-items: center }
+.share code { font-family: var(--font-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; overflow-wrap: anywhere; min-width: 0 }
+.bigcode { font-family: var(--font-mono); font-weight: 700; font-size: 2rem; letter-spacing: .2em }
+
+/* Street View stage */
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start }
+.viewer { position: relative; min-width: 0 }
+.pano { width: 100%; height: min(72vh, 680px); min-height: 340px; border-radius: 10px; overflow: hidden; background: var(--surface); border: 1px solid var(--line) }
+.pano-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center; border: 2px dashed var(--line); border-radius: 10px; background: var(--bg); color: var(--muted) }
+.viewer-tools { position: absolute; left: 10px; bottom: 28px; display: flex; gap: 8px; z-index: 2 }
+.minimap { position: absolute; right: 10px; bottom: 28px; width: min(320px, 60%); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; z-index: 2 }
+#miniMap { width: 100%; aspect-ratio: 4/3 }
+.minimap .hint { font-size: .8rem; color: var(--muted); padding: 6px 10px }
+.side { display: flex; flex-direction: column; gap: 12px; max-height: min(72vh, 680px); overflow-y: auto; min-width: 0 }
+
+.term { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface) }
+.term.found { border-color: var(--ok) }
+.term .state { font-size: .82rem; font-weight: 700; color: var(--muted) }
+.term.found .state { color: var(--ok) }
+
+.find { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; text-align: left; font-family: var(--font-body); font-weight: 400; width: 100% }
+.find.active { border-color: var(--route); box-shadow: inset 4px 0 0 var(--route) }
+.find.invalid { opacity: .6 }
+.verdict { font-weight: 700; font-size: .82rem; white-space: nowrap }
+.verdict.ok { color: var(--ok) }
+.verdict.bad { color: var(--bad) }
+.vote { display: flex; gap: 6px; flex-wrap: wrap }
+.vote button.on-ok { background: var(--ok); border-color: var(--ok); color: #fff }
+.vote button.on-bad { background: var(--bad); border-color: var(--bad); color: #fff }
+.vote button.on-star { background: var(--star); border-color: var(--star); color: #111 }
+
+.empty { border: 2px dashed var(--line); border-radius: 10px; padding: 20px; text-align: center; color: var(--muted) }
+table.score { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums }
+table.score th, table.score td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line) }
+table.score td.n { text-align: right; font-family: var(--font-mono) }
+table.score tr.first td { font-weight: 700 }
+.tablewrap { overflow-x: auto }
+.steps { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; max-width: 65ch }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; z-index: 60; max-width: calc(100% - 32px) }
+.setup code { font-family: var(--font-mono); background: var(--bg); padding: 1px 5px; border-radius: 4px }
+
+@media (max-width: 860px) {
+  .stage { grid-template-columns: 1fr }
+  .pano { height: 58vh }
+  .side { max-height: none; overflow: visible }
+  .minimap { width: min(260px, 70%) }
+}

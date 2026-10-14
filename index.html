@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Straßenjagd</title>
+  <meta name="description" content="Schnitzeljagd in Google Street View: Begriffe finden, gemeinsam bewerten.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800;900&family=Overpass+Mono:wght@500;700&family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <span class="label">Schnitzeljagd in Street View</span>
+        <h1>Straßenjagd</h1>
+        <div class="road" aria-hidden="true"></div>
+      </div>
+      <span class="mode" id="mode">Verbinde …</span>
+    </header>
+
+    <main id="main">
+      <div id="screen"></div>
+
+      <!-- Street View containers stay in the DOM so panoramas are not rebuilt on every render. -->
+      <section id="huntStage" class="stage" hidden>
+        <div class="viewer">
+          <div id="huntPano" class="pano"></div>
+          <div class="viewer-tools">
+            <button type="button" id="randomBtn" class="small sign">Zufälliger Ort</button>
+            <button type="button" id="mapToggle" class="small">Karte</button>
+          </div>
+          <div id="miniMapWrap" class="minimap" hidden>
+            <div id="miniMap"></div>
+            <p class="hint">Auf die Karte tippen, um dorthin zu springen.</p>
+          </div>
+        </div>
+        <aside id="huntSide" class="side"></aside>
+      </section>
+
+      <section id="reviewStage" class="stage" hidden>
+        <div class="viewer">
+          <div id="reviewPano" class="pano"></div>
+          <div id="reviewEmpty" class="pano-empty" hidden>Diesen Begriff hat niemand gefunden.</div>
+        </div>
+        <aside id="reviewSide" class="side"></aside>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
