@@ -1,11 +1,16 @@
 // Straßenjagd: scavenger hunt in Google Street View.
 // Players search in Google Maps (app or second tab) and hand in a Street View
-// link and/or a screenshot. Firebase (anonymous auth + Firestore on the free
-// Spark plan) keeps the shared game state. No Google Maps API key is used.
+// link and/or a screenshot. Devices share the game over a free public MQTT
+// broker: no account, no key, nothing to set up.
+//
+// Topics (all retained, under the game code):
+//   <code>/game        game settings and phase, written by the host
+//   <code>/p/<uid>     one document per player: name, finds, votes
+//   <code>/img/<id>    optional screenshot per find
 
-import { CONFIG } from './config.js';
 import { generateTerms, START_SPOTS } from './terms.js';
 import { parseStreetViewLink, isMapsLink, openUrl, embedUrl, randomStreetViewUrl } from './streetview.js';
+import { createNet } from './net.js';
 
 /* ---------------- helpers ---------------- */
 const $ = s => document.querySelector(s);
@@ -26,84 +31,154 @@ function toast(msg) {
   document.body.append(t);
   setTimeout(() => t.remove(), 3500);
 }
-function store(key, value) { try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (_) { return null; } return null; }
+function store(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value);
+  } catch (_) { return null; }
+  return null;
+}
+const loadJson = key => { try { return JSON.parse(store(key) || 'null'); } catch (_) { return null; } };
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-const newCode = () => Array.from({ length: 5 }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
+const randomId = n => Array.from({ length: n }, () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]).join('');
 const statusText = s => ({ lobby: 'wartet', hunt: 'läuft', review: 'Auswertung', done: 'beendet' }[s] || s);
 const errText = e => (e && (e.code || e.message)) || 'unbekannter Fehler';
 const extLink = (href, text, cls) => el('a', { href, target: '_blank', rel: 'noopener noreferrer', class: cls || null, text });
-
-/* ---------------- setup check ---------------- */
-const configured = !/HIER_|DEIN-PROJEKT/.test(CONFIG.firebase.apiKey + CONFIG.firebase.projectId + CONFIG.firebase.appId);
-if (!configured) {
-  $('#mode').textContent = 'Nicht eingerichtet';
-  $('#mode').classList.add('error');
-  $('#screen').append(el('section', { class: 'panel setup' },
-    el('h2', { text: 'Fast fertig: Firebase-Daten eintragen' }),
-    el('p', {}, 'In ', el('code', { text: 'config.js' }), ' fehlen noch die Firebase-Daten. Die Anleitung steht in der ', el('code', { text: 'README.md' }), ' unter „Einrichten“.')));
-  throw new Error('config.js is not filled in');
-}
-
-/* ---------------- Firebase (loaded only once config.js is filled in) ---------------- */
-const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
-const [{ initializeApp }, { getAuth, signInAnonymously, onAuthStateChanged }, {
-  getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, onSnapshot
-}] = await Promise.all([import(FB + 'firebase-app.js'), import(FB + 'firebase-auth.js'), import(FB + 'firebase-firestore.js')]);
-const fbApp = initializeApp(CONFIG.firebase);
-const auth = getAuth(fbApp);
-const db = getFirestore(fbApp);
+const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+const numOrNull = v => (typeof v === 'number' && isFinite(v) ? v : null);
 
 /* ---------------- state ---------------- */
+const params = new URLSearchParams(location.search);
+const BROKER_OVERRIDE = params.get('broker'); // for local testing only
+const net = createNet();
 const S = {
-  uid: null,
+  uid: store('sj-uid') || (() => { const id = 'u' + randomId(10).toLowerCase(); store('sj-uid', id); return id; })(),
   nick: store('sj-nick') || '',
+  online: false,
   code: null,
   game: null,
-  players: [],
-  finds: [],
-  votes: [],
+  docs: {},       // uid -> player document as received
+  me: null,       // my own player document (source of truth for my writes)
+  imgs: {},       // find id -> data URL
+  players: [], finds: [], votes: [],
   unsubs: [],
-  myVotes: null,
+  joining: false,
   pasteTarget: null
 };
+const gameQuery = code => '?spiel=' + code + '&b=' + net.brokerIndex + (BROKER_OVERRIDE ? '&broker=' + encodeURIComponent(BROKER_OVERRIDE) : '');
 const isHost = () => S.game && S.game.hostId === S.uid;
 const nameOf = id => (S.players.find(p => p.id === id) || {}).nick || 'Jemand';
-const gamePath = (...rest) => ['games', S.code, ...rest].join('/');
 const myFind = i => S.finds.find(f => f.uid === S.uid && f.term === i);
+const findId = (uid, term) => uid + '_' + term;
+
+// Turns the raw player documents into the lists the views use.
+function derive() {
+  const docs = { ...S.docs };
+  if (S.me) docs[S.uid] = S.me;
+  const terms = S.game ? S.game.terms.length : 0;
+  S.players = Object.entries(docs).filter(([, d]) => d && d.nick)
+    .map(([id, d]) => ({ id, nick: str(d.nick, 24), joinedAt: d.joinedAt || 0, done: !!d.done }))
+    .sort((a, b) => a.joinedAt - b.joinedAt);
+  S.finds = [];
+  S.votes = [];
+  for (const [uid, d] of Object.entries(docs)) {
+    if (!d || !d.nick) continue;
+    for (const [k, f] of Object.entries(d.finds || {})) {
+      const term = Number(k);
+      if (!Number.isInteger(term) || term < 0 || term >= terms || !f) continue;
+      S.finds.push({
+        id: findId(uid, term), uid, term,
+        link: str(f.link, 800), lat: numOrNull(f.lat), lng: numOrNull(f.lng),
+        heading: numOrNull(f.heading) || 0, pitch: numOrNull(f.pitch) || 0, fov: numOrNull(f.fov) || 75,
+        pano: str(f.pano, 120), streetView: f.streetView !== false, hasImg: !!f.hasImg
+      });
+    }
+    S.votes.push({ id: uid, v: d.v || {}, s: d.s || {} });
+  }
+}
+
+/* ---------------- connection ---------------- */
+net.onStatus(status => {
+  S.online = status === 'online';
+  const m = $('#mode');
+  m.textContent = status === 'online' ? 'Verbunden' : status === 'offline' ? 'Offline – verbinde neu …' : 'Verbinde …';
+  m.classList.toggle('online', S.online);
+  m.classList.toggle('error', status === 'offline');
+  if (S.online && S.code && S.me) publishMe(); // make sure the latest state is out after a reconnect
+});
 
 /* ---------------- game subscriptions ---------------- */
+function leaveTopics() { S.unsubs.forEach(u => u()); S.unsubs = []; }
 function closeGame() {
-  S.unsubs.forEach(u => u());
-  S.unsubs = [];
-  Object.assign(S, { code: null, game: null, players: [], finds: [], votes: [], myVotes: null });
-  history.replaceState(null, '', location.pathname);
+  // After the end, everyone removes their own retained data from the public server.
+  if (S.game && S.game.status === 'done' && S.me) {
+    for (const k of Object.keys(S.me.finds || {})) if (S.me.finds[k].hasImg) net.publish(`${S.code}/img/${findId(S.uid, k)}`, '', true).catch(() => {});
+    net.publish(`${S.code}/p/${S.uid}`, '', true).catch(() => {});
+    if (isHost()) net.publish(`${S.code}/game`, '', true).catch(() => {});
+    store('sj-me-' + S.code, null);
+    store('sj-host-' + S.code, null);
+  }
+  leaveTopics();
+  Object.assign(S, { code: null, game: null, docs: {}, me: null, imgs: {}, players: [], finds: [], votes: [], joining: false });
+  history.replaceState(null, '', location.pathname + (BROKER_OVERRIDE ? '?broker=' + encodeURIComponent(BROKER_OVERRIDE) : ''));
   render();
 }
-function openGame(code) {
-  S.unsubs.forEach(u => u());
-  S.unsubs = [];
+// Subscribes to a game; resolves true once its settings arrive, false after the timeout.
+function openGame(code, timeoutMs = 5000) {
+  leaveTopics();
   S.code = code;
-  S.myVotes = null;
-  history.replaceState(null, '', location.pathname + '?spiel=' + code);
-  const onErr = e => toast('Verbindung gestört: ' + errText(e));
-  S.unsubs.push(onSnapshot(doc(db, gamePath()), snap => {
-    if (!snap.exists()) { toast('Dieses Spiel gibt es nicht (mehr).'); closeGame(); return; }
-    S.game = snap.data();
+  S.game = null; S.docs = {}; S.imgs = {};
+  S.me = loadJson('sj-me-' + code);
+  let resolveFound;
+  const found = new Promise(r => { resolveFound = r; });
+  S.unsubs.push(net.subscribe(`${code}/game`, text => {
+    if (!text) { if (S.game) { toast('Die Spielleitung hat das Spiel beendet.'); S.game = null; closeGame(); } return; }
+    let g;
+    try { g = JSON.parse(text); } catch (_) { return; }
+    // ignore echoes of older versions (e.g. our own previous publish arriving late)
+    if (S.game && S.game.code === g.code && (g.rev || 0) < (S.game.rev || 0)) return;
+    S.game = g;
+    resolveFound(true);
+    derive(); render();
+  }));
+  S.unsubs.push(net.subscribe(`${code}/p/+`, (text, topic) => {
+    const uid = topic.split('/').pop();
+    if (!text) delete S.docs[uid];
+    else { try { S.docs[uid] = JSON.parse(text); } catch (_) { return; } }
+    // adopt my own retained document if this device lost its copy
+    if (uid === S.uid && !S.me && S.docs[uid]) S.me = S.docs[uid];
+    derive(); render();
+  }));
+  S.unsubs.push(net.subscribe(`${code}/img/+`, (text, topic) => {
+    const id = topic.split('/').pop();
+    if (text) S.imgs[id] = text; else delete S.imgs[id];
     render();
-  }, onErr));
-  S.unsubs.push(onSnapshot(collection(db, gamePath('players')), snap => {
-    S.players = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-    render();
-  }, onErr));
-  S.unsubs.push(onSnapshot(collection(db, gamePath('finds')), snap => {
-    S.finds = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    render();
-  }, onErr));
-  S.unsubs.push(onSnapshot(collection(db, gamePath('votes')), snap => {
-    S.votes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    render();
-  }, onErr));
+  }));
+  history.replaceState(null, '', location.pathname + gameQuery(code));
+  setTimeout(() => resolveFound(false), timeoutMs);
+  render();
+  return found;
 }
+
+/* ---------------- publishing ---------------- */
+let gameTimer = 0, meTimer = 0;
+function publishGame() {
+  store('sj-host-' + S.code, JSON.stringify(S.game));
+  derive(); render();
+  const body = JSON.stringify(S.game);
+  clearTimeout(gameTimer);
+  gameTimer = setTimeout(() => net.publish(`${S.code}/game`, body, true).catch(e => toast('Senden fehlgeschlagen: ' + errText(e))), 50);
+}
+function publishMe() {
+  if (!S.code || !S.me) return;
+  store('sj-me-' + S.code, JSON.stringify(S.me));
+  derive(); render();
+  const body = JSON.stringify(S.me);
+  clearTimeout(meTimer);
+  meTimer = setTimeout(() => net.publish(`${S.code}/p/${S.uid}`, body, true).catch(e => toast('Senden fehlgeschlagen: ' + errText(e))), 80);
+}
+function updateGame(patch) { S.game = { ...S.game, ...patch, rev: (S.game.rev || 0) + 1 }; publishGame(); }
+function updateMe(fn) { S.me = JSON.parse(JSON.stringify(S.me)); fn(S.me); publishMe(); }
 
 /* ---------------- actions ---------------- */
 function readNick() {
@@ -113,78 +188,104 @@ function readNick() {
   store('sj-nick', S.nick);
   return S.nick;
 }
+async function ensureOnline() {
+  if (S.online) return;
+  await net.connect(Number(params.get('b')) || 0, BROKER_OVERRIDE);
+}
 async function createGame() {
   const nick = readNick(); if (!nick) return;
+  await ensureOnline();
   const count = +$('#count').value, level = $('#level').value, minutes = +$('#minutes').value;
   const { terms, letter } = generateTerms(count, level, $('#letter').checked);
-  let code = newCode();
-  for (let i = 0; i < 5 && (await getDoc(doc(db, 'games', code))).exists(); i++) code = newCode();
-  await setDoc(doc(db, 'games', code), { code, hostId: S.uid, hostNick: nick, status: 'lobby', terms, letter, minutes, createdAt: Date.now(), endsAt: 0, reviewIdx: 0 });
-  await setDoc(doc(db, 'games', code, 'players', S.uid), { nick, joinedAt: Date.now(), done: false });
-  openGame(code);
+  const code = randomId(5);
+  openGame(code, 0);
+  S.game = { code, hostId: S.uid, hostNick: nick, status: 'lobby', terms, letter, minutes, createdAt: Date.now(), endsAt: 0, reviewIdx: 0 };
+  S.me = { nick, joinedAt: Date.now(), done: false, finds: {}, v: {}, s: {} };
+  publishGame();
+  publishMe();
 }
 async function joinGame(rawCode) {
   const nick = readNick(); if (!nick) return;
   const code = (rawCode || '').trim().toUpperCase();
   if (!/^[A-Z0-9]{5}$/.test(code)) { toast('Der Spielcode hat 5 Zeichen.'); return; }
-  const snap = await getDoc(doc(db, 'games', code));
-  if (!snap.exists()) { toast('Kein Spiel mit dem Code ' + code + ' gefunden.'); return; }
-  await setDoc(doc(db, 'games', code, 'players', S.uid), { nick, joinedAt: Date.now(), done: false });
-  openGame(code);
+  S.joining = true; render();
+  try {
+    await ensureOnline();
+    let ok = await openGame(code);
+    if (!ok && !BROKER_OVERRIDE) {
+      // the game may live on the other server
+      const other = net.brokerIndex === 0 ? 1 : 0;
+      await net.connect(other);
+      ok = await openGame(code);
+    }
+    if (!ok) { toast('Kein Spiel mit dem Code ' + code + ' gefunden.'); closeGame(); return; }
+    S.me = S.me || S.docs[S.uid] || { nick, joinedAt: Date.now(), done: false, finds: {}, v: {}, s: {} };
+    updateMe(me => { me.nick = nick; });
+  } finally { S.joining = false; render(); }
 }
-const updGame = data => updateDoc(doc(db, gamePath()), data).catch(e => toast('Speichern fehlgeschlagen: ' + errText(e)));
-const startHunt = () => updGame({ status: 'hunt', endsAt: S.game.minutes ? Date.now() + S.game.minutes * 60000 : 0 });
-const startReview = () => updGame({ status: 'review', reviewIdx: 0 });
-const finishGame = () => updGame({ status: 'done' });
-const setDone = v => updateDoc(doc(db, gamePath('players', S.uid)), { done: v });
+const startHunt = () => updateGame({ status: 'hunt', endsAt: S.game.minutes ? Date.now() + S.game.minutes * 60000 : 0 });
+const startReview = () => updateGame({ status: 'review', reviewIdx: 0 });
+const finishGame = () => updateGame({ status: 'done' });
+const setDone = v => updateMe(me => { me.done = v; });
 
-async function saveFind(i, patch) {
-  const prev = myFind(i) || {};
-  const body = { uid: S.uid, term: i, link: '', img: '', lat: null, lng: null, heading: 0, pitch: 0, fov: 75, pano: '', streetView: true, at: Date.now(), ...stripMeta(prev), ...patch };
-  if (!body.link && !body.img) { await removeFind(i); return; }
-  try { await setDoc(doc(db, gamePath('finds', S.uid + '_' + i)), body); }
-  catch (e) { toast('Speichern fehlgeschlagen: ' + errText(e)); throw e; }
+function saveFind(i, patch) {
+  updateMe(me => {
+    const prev = (me.finds || {})[i] || {};
+    const next = { link: '', lat: null, lng: null, heading: 0, pitch: 0, fov: 75, pano: '', streetView: true, hasImg: false, ...prev, ...patch };
+    me.finds = me.finds || {};
+    if (!next.link && !next.hasImg) delete me.finds[i]; else me.finds[i] = next;
+  });
 }
-function stripMeta(f) { const { id, ...rest } = f; return rest; }
-async function saveLink(i, raw) {
+function saveLink(i, raw) {
   const link = (raw || '').trim();
-  if (!link) { await saveFind(i, { link: '', lat: null, lng: null, pano: '' }); return; }
+  if (!link) { saveFind(i, { link: '', lat: null, lng: null, pano: '' }); return; }
   if (!/^https:\/\//.test(link)) { toast('Bitte den ganzen Link einfügen (beginnt mit https://).'); return; }
   const sv = parseStreetViewLink(link) || {};
-  await saveFind(i, { link, lat: sv.lat ?? null, lng: sv.lng ?? null, heading: sv.heading ?? 0, pitch: sv.pitch ?? 0, fov: sv.fov ?? 75, pano: sv.pano || '', streetView: sv.streetView !== false });
-  toast(sv.lat != null && sv.streetView === false ? 'Gespeichert. Das ist ein Karten-Link, nicht Street View. Öffne Street View und kopier den Link dort.' : sv.lat != null ? 'Fund gespeichert.' : 'Link gespeichert. Tipp: Ein Screenshot dazu hilft bei der Auswertung.');
+  saveFind(i, { link, lat: sv.lat ?? null, lng: sv.lng ?? null, heading: sv.heading ?? 0, pitch: sv.pitch ?? 0, fov: sv.fov ?? 75, pano: sv.pano || '', streetView: sv.streetView !== false });
+  toast(sv.lat != null && sv.streetView === false ? 'Gespeichert. Das ist ein Karten-Link, nicht Street View. Öffne Street View und kopier den Link dort.'
+    : sv.lat != null ? 'Fund gespeichert.' : 'Link gespeichert. Tipp: Ein Screenshot dazu hilft bei der Auswertung.');
 }
 async function saveImage(i, file) {
   if (!file || !file.type.startsWith('image/')) { toast('Bitte ein Bild wählen.'); return; }
-  try { await saveFind(i, { img: await compress(file) }); toast('Bild gespeichert.'); }
-  catch (e) { if (!e.code) toast('Bild konnte nicht verarbeitet werden.'); }
+  try {
+    const data = await compress(file);
+    const id = findId(S.uid, i);
+    S.imgs[id] = data;
+    await net.publish(`${S.code}/img/${id}`, data, true);
+    saveFind(i, { hasImg: true });
+    toast('Bild gespeichert.');
+  } catch (e) { toast('Bild konnte nicht gesendet werden: ' + errText(e)); }
 }
-const removeFind = i => deleteDoc(doc(db, gamePath('finds', S.uid + '_' + i)));
+function removeFind(i) {
+  const f = (S.me.finds || {})[i];
+  if (f && f.hasImg) { net.publish(`${S.code}/img/${findId(S.uid, i)}`, '', true).catch(() => {}); delete S.imgs[findId(S.uid, i)]; }
+  updateMe(me => { delete me.finds[i]; });
+}
 
-// Screenshots are shrunk to JPEG data URLs well below Firestore's 1 MiB document limit.
+// Screenshots are shrunk to small JPEGs so they travel quickly through the public server.
 async function compress(file) {
   const url = URL.createObjectURL(file);
   const img = new Image();
   img.src = url;
   await img.decode();
   URL.revokeObjectURL(url);
-  let max = 1400;
-  for (let round = 0; round < 5; round++) {
+  let max = 1100;
+  for (let round = 0; round < 6; round++) {
     const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
     const c = document.createElement('canvas');
     c.width = Math.round(img.naturalWidth * scale);
     c.height = Math.round(img.naturalHeight * scale);
     c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    for (const q of [0.8, 0.68, 0.56]) { const d = c.toDataURL('image/jpeg', q); if (d.length < 450000) return d; }
+    for (const q of [0.72, 0.6, 0.5]) { const d = c.toDataURL('image/jpeg', q); if (d.length < 120000) return d; }
     max = Math.round(max * 0.75);
   }
-  throw new Error('too large');
+  throw new Error('Bild zu groß');
 }
 
 // Paste anywhere during the hunt: a Maps link or a screenshot lands on the term under the pointer
 // (or the first open one).
 document.addEventListener('paste', e => {
-  if (!S.game || S.game.status !== 'hunt') return;
+  if (!S.game || S.game.status !== 'hunt' || !S.me) return;
   const item = [...(e.clipboardData ? e.clipboardData.items : [])].find(x => x.type.startsWith('image/'));
   const text = e.clipboardData ? e.clipboardData.getData('text').trim() : '';
   const inField = document.activeElement && /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
@@ -196,21 +297,14 @@ document.addEventListener('paste', e => {
   if (item) saveImage(i, item.getAsFile()); else saveLink(i, text);
 });
 
-// Votes: one document per voter, written one at a time.
-let voteChain = Promise.resolve();
-function myVotes() {
-  if (S.myVotes) return S.myVotes;
-  const d = S.votes.find(v => v.id === S.uid);
-  return { v: { ...((d && d.v) || {}) }, s: { ...((d && d.s) || {}) } };
-}
-function vote(findId, kind) {
-  const mv = myVotes();
-  if (kind === 'star') { if (mv.s[findId]) delete mv.s[findId]; else mv.s[findId] = true; }
-  else { const val = kind === 'ok' ? 1 : -1; if (mv.v[findId] === val) delete mv.v[findId]; else mv.v[findId] = val; }
-  S.myVotes = mv;
-  render();
-  const body = JSON.parse(JSON.stringify(mv));
-  voteChain = voteChain.then(() => setDoc(doc(db, gamePath('votes', S.uid)), body)).catch(e => toast('Stimme nicht gespeichert: ' + errText(e)));
+// Votes live in the voter's own player document.
+function myVotes() { return { v: { ...((S.me && S.me.v) || {}) }, s: { ...((S.me && S.me.s) || {}) } }; }
+function vote(id, kind) {
+  updateMe(me => {
+    me.v = me.v || {}; me.s = me.s || {};
+    if (kind === 'star') { if (me.s[id]) delete me.s[id]; else me.s[id] = true; }
+    else { const val = kind === 'ok' ? 1 : -1; if (me.v[id] === val) delete me.v[id]; else me.v[id] = val; }
+  });
 }
 
 /* ---------------- scoring ---------------- */
@@ -218,9 +312,9 @@ function tally(f) {
   let ok = 0, bad = 0, stars = 0;
   for (const v of S.votes) {
     if (v.id === f.uid) continue; // own votes do not count
-    const x = (v.v || {})[f.id];
+    const x = v.v[f.id];
     if (x === 1) ok++; else if (x === -1) bad++;
-    if ((v.s || {})[f.id]) stars++;
+    if (v.s[f.id]) stars++;
   }
   const valid = bad <= ok;
   return { ok, bad, stars, valid, points: valid ? 10 + 3 * stars : 0 };
@@ -247,7 +341,7 @@ function draw() {
   const me = S.players.find(p => p.id === S.uid);
 
   let view;
-  if (!S.uid) view = [el('p', { class: 'muted', text: 'Verbinde …' })];
+  if (S.joining) view = [el('p', { class: 'muted', text: 'Suche Spiel …' })];
   else if (!S.code || !S.game) view = viewStart();
   else if (!me && status !== 'done') view = viewJoin();
   else if (status === 'lobby') view = viewLobby();
@@ -299,7 +393,7 @@ function viewJoin() {
     el('h2', { text: 'Spiel ' + S.code + ' beitreten' }),
     el('div', { class: 'field' }, el('label', { class: 'lbl', for: 'nick', text: 'Dein Name' }), el('input', { type: 'text', id: 'nick', maxlength: '24', value: S.nick })),
     el('div', { class: 'row' },
-      el('button', { class: 'primary', text: 'Beitreten', onclick: () => joinGame(S.code) }),
+      el('button', { class: 'primary', text: 'Beitreten', onclick: () => joinGame(S.code).catch(e => toast('Fehler: ' + errText(e))) }),
       el('button', { class: 'ghost', text: 'Zurück', onclick: closeGame })))];
 }
 
@@ -318,7 +412,7 @@ function statusBar(extra) {
       playerChips()),
     extra || null);
 }
-function inviteLink() { return location.origin + location.pathname + '?spiel=' + S.code; }
+function inviteLink() { return location.origin + location.pathname + gameQuery(S.code); }
 async function copyInvite() {
   try { await navigator.clipboard.writeText(inviteLink()); toast('Link kopiert. Schick ihn an deine Freunde.'); }
   catch (_) { toast('Kopieren ging nicht. Markier den Link und kopier ihn von Hand.'); }
@@ -371,10 +465,10 @@ function termCard(t, i) {
       el('input', { type: 'text', inputmode: 'url', id: 'link-' + i, placeholder: 'Street-View-Link einfügen', value: (f && f.link) || '', autocomplete: 'off',
         onchange: e => saveLink(i, e.target.value), onkeydown: e => { if (e.key === 'Enter') e.target.blur(); } }),
       el('button', { class: 'small', type: 'button', text: 'Einfügen', title: 'Link aus der Zwischenablage einfügen', onclick: () => pasteFromClipboard(i) })),
-    f && f.img ? el('img', { class: 'thumb', src: f.img, alt: 'Dein Bild für ' + t }) : null,
+    f && f.hasImg && S.imgs[f.id] ? el('img', { class: 'thumb', src: S.imgs[f.id], alt: 'Dein Bild für ' + t }) : null,
     el('div', { class: 'row' },
       fileInput,
-      el('button', { class: 'small ghost', type: 'button', text: f && f.img ? 'Bild ersetzen' : 'Bild hinzufügen', onclick: () => fileInput.click() }),
+      el('button', { class: 'small ghost', type: 'button', text: f && f.hasImg ? 'Bild ersetzen' : 'Bild hinzufügen', onclick: () => fileInput.click() }),
       f && (f.link || f.lat != null) ? extLink(openUrl(f), 'Prüfen', 'btn small ghost') : null,
       f ? el('button', { class: 'small ghost', type: 'button', text: 'Löschen', onclick: () => removeFind(i) }) : null));
 }
@@ -398,9 +492,9 @@ function viewReview() {
   const nav = el('div', { class: 'row', style: 'justify-content:space-between' },
     el('div', { class: 'ort big', style: 'flex:1 1 280px' }, el('div', {}, el('small', { text: `Begriff ${i + 1} von ${S.game.terms.length}` }), S.game.terms[i])),
     isHost() ? el('div', { class: 'row' },
-      el('button', { class: 'small', disabled: i === 0, text: '← Zurück', onclick: () => updGame({ reviewIdx: i - 1 }) }),
+      el('button', { class: 'small', disabled: i === 0, text: '← Zurück', onclick: () => updateGame({ reviewIdx: i - 1 }) }),
       i < S.game.terms.length - 1
-        ? el('button', { class: 'primary', text: 'Nächster Begriff →', onclick: () => updGame({ reviewIdx: i + 1 }) })
+        ? el('button', { class: 'primary', text: 'Nächster Begriff →', onclick: () => updateGame({ reviewIdx: i + 1 }) })
         : el('button', { class: 'sign', text: 'Ergebnis zeigen', onclick: finishGame }))
       : el('span', { class: 'muted', text: 'Die Spielleitung blättert weiter.' }));
   const cards = finds.length ? el('div', { class: 'subs' }, finds.map(f => findCard(f, mv))) : el('p', { class: 'empty', text: 'Diesen Begriff hat niemand gefunden.' });
@@ -408,7 +502,8 @@ function viewReview() {
     el('p', { class: 'muted', text: 'Ein Fund gilt, solange nicht mehr Leute „Gilt nicht“ als „Gilt“ sagen. Eigene Stimmen zählen nicht.' })];
 }
 function findVisual(f) {
-  if (f.img) return el('img', { class: 'shot', src: f.img, alt: 'Fund von ' + nameOf(f.uid), onclick: () => lightbox(f.img) });
+  const img = f.hasImg && S.imgs[f.id];
+  if (img) return el('img', { class: 'shot', src: img, alt: 'Fund von ' + nameOf(f.uid), onclick: () => lightbox(img) });
   const src = embedUrl(f);
   if (src) {
     let frame = frameCache.get(f.id + src);
@@ -467,35 +562,32 @@ function tick() {
   const m = Math.floor(left / 60000), s = Math.floor(left / 1000) % 60;
   t.textContent = left ? `${m}:${String(s).padStart(2, '0')}` : 'Zeit um!';
   t.classList.toggle('late', left < 60000);
-  // Time is up: every open client switches to review (same value, so races are harmless).
+  // Time is up: every open device switches to review (same value, so races are harmless).
   if (!left && !autoFired && S.game.status === 'hunt') {
     autoFired = true;
     toast('Zeit um! Auf zur Auswertung.');
-    updateDoc(doc(db, gamePath()), { status: 'review', reviewIdx: 0 }).catch(() => { autoFired = false; });
+    updateGame({ status: 'review', reviewIdx: 0 });
   }
   if (left) autoFired = false;
 }
 setInterval(tick, 1000);
 
 /* ---------------- start ---------------- */
-onAuthStateChanged(auth, user => {
-  if (!user) return;
-  S.uid = user.uid;
-  $('#mode').textContent = 'Verbunden';
-  $('#mode').classList.add('online');
-  const code = (new URLSearchParams(location.search).get('spiel') || '').toUpperCase();
-  if (code && S.nick) {
-    // returning player (e.g. after reload): rejoin directly if already in that game
-    getDoc(doc(db, 'games', code, 'players', S.uid)).then(snap => { if (snap.exists()) openGame(code); else render(); }).catch(() => render());
-  } else {
-    render();
+(async () => {
+  render();
+  try {
+    await net.connect(Number(params.get('b')) || 0, BROKER_OVERRIDE);
+  } catch (_) {
+    $('#mode').textContent = 'Keine Verbindung';
+    $('#mode').classList.add('error');
+    toast('Keine Verbindung zum Spielserver. Prüf dein Internet und lade die Seite neu.');
+    return;
   }
-});
-signInAnonymously(auth).catch(e => {
-  $('#mode').textContent = 'Keine Verbindung';
-  $('#mode').classList.add('error');
-  $('#screen').replaceChildren(el('section', { class: 'panel' },
-    el('h2', { text: 'Anmeldung bei Firebase fehlgeschlagen' }),
-    el('p', { text: 'Prüf in der Firebase-Konsole, ob „Anonym“ unter Authentication aktiviert ist und ob diese Domain bei „Autorisierte Domains“ steht. Fehler: ' + errText(e) })));
-});
-render();
+  const code = (params.get('spiel') || '').toUpperCase();
+  // Returning player (e.g. after a reload or coming back from the Maps app): rejoin directly.
+  if (/^[A-Z0-9]{5}$/.test(code) && (loadJson('sj-me-' + code) || loadJson('sj-host-' + code))) {
+    const ok = await openGame(code);
+    if (!ok) closeGame();
+  }
+  render();
+})();
