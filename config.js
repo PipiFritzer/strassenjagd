@@ -1,11 +1,8 @@
-// Fill in your own keys here (see README.md, "Einrichten").
-// Both values are meant to be public in a web page; protect them with the
-// restrictions described in the README instead of hiding them.
+// Fill in your Firebase web app config here (see README.md, "Einrichten").
+// These values are meant to be public in a web page; the Firestore rules
+// in firestore.rules decide what visitors may read and write.
 
 export const CONFIG = {
-  // Google Cloud Console → APIs & Services → Credentials
-  googleMapsApiKey: 'HIER_GOOGLE_MAPS_KEY_EINFUEGEN',
-
   // Firebase Console → Project settings → Your apps → Web app → SDK setup and configuration
   firebase: {
     apiKey: 'HIER_FIREBASE_API_KEY_EINFUEGEN',

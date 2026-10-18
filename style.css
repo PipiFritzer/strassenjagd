@@ -87,17 +87,6 @@ a { color: var(--route) }
 .share code { font-family: var(--font-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; overflow-wrap: anywhere; min-width: 0 }
 .bigcode { font-family: var(--font-mono); font-weight: 700; font-size: 2rem; letter-spacing: .2em }
 
-/* Street View stage */
-.stage { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start }
-.viewer { position: relative; min-width: 0 }
-.pano { width: 100%; height: min(72vh, 680px); min-height: 340px; border-radius: 10px; overflow: hidden; background: var(--surface); border: 1px solid var(--line) }
-.pano-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center; border: 2px dashed var(--line); border-radius: 10px; background: var(--bg); color: var(--muted) }
-.viewer-tools { position: absolute; left: 10px; bottom: 28px; display: flex; gap: 8px; z-index: 2 }
-.minimap { position: absolute; right: 10px; bottom: 28px; width: min(320px, 60%); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; z-index: 2 }
-#miniMap { width: 100%; aspect-ratio: 4/3 }
-.minimap .hint { font-size: .8rem; color: var(--muted); padding: 6px 10px }
-.side { display: flex; flex-direction: column; gap: 12px; max-height: min(72vh, 680px); overflow-y: auto; min-width: 0 }
-
 .term { display: flex; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface) }
 .term.found { border-color: var(--ok) }
 .term .state { font-size: .82rem; font-weight: 700; color: var(--muted) }
@@ -124,9 +113,25 @@ table.score tr.first td { font-weight: 700 }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; z-index: 60; max-width: calc(100% - 32px) }
 .setup code { font-family: var(--font-mono); background: var(--bg); padding: 1px 5px; border-radius: 4px }
 
-@media (max-width: 860px) {
-  .stage { grid-template-columns: 1fr }
-  .pano { height: 58vh }
-  .side { max-height: none; overflow: visible }
-  .minimap { width: min(260px, 70%) }
-}
+/* Hunt and review grids */
+.hunt { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px }
+.linkrow { display: flex; gap: 6px; min-width: 0 }
+.linkrow input { flex: 1 1 auto }
+.thumb { width: 100%; aspect-ratio: 16/10; object-fit: cover; border-radius: 6px; display: block }
+a.btn { display: inline-flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 800; text-decoration: none; border-radius: 8px; border: 2px solid var(--ink); background: var(--surface); color: var(--ink); padding: 9px 16px; line-height: 1.2 }
+a.btn.small { padding: 5px 10px; font-size: .85rem; border-width: 1.5px }
+a.btn.sign { background: var(--sign); border-color: var(--sign-ink); color: var(--sign-ink) }
+a.btn.ghost { border-color: var(--line); color: var(--muted); background: transparent }
+.subs { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px }
+.sub { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface); display: flex; flex-direction: column; min-width: 0 }
+.sub.invalid { opacity: .6 }
+.sub .body { padding: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start }
+.sub .who { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; width: 100% }
+.shot { width: 100%; aspect-ratio: 4/3; border: 0; display: block; background: var(--bg); object-fit: cover }
+img.shot { cursor: zoom-in }
+.shot.placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-decoration: none; color: var(--ink);
+  background: repeating-linear-gradient(135deg, var(--bg) 0 14px, var(--surface) 14px 28px) }
+.shot.placeholder strong { font-family: var(--font-display); font-size: 1.15rem; color: var(--route) }
+.pin { width: 22px; height: 30px; background: var(--sign); border: 2.5px solid var(--sign-ink); border-radius: 50% 50% 50% 50% / 40% 40% 60% 60% }
+.lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: grid; place-items: center; z-index: 50; padding: 16px; cursor: zoom-out }
+.lightbox img { max-width: 100%; max-height: 90vh; border-radius: 6px }

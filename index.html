@@ -23,30 +23,6 @@
 
     <main id="main">
       <div id="screen"></div>
-
-      <!-- Street View containers stay in the DOM so panoramas are not rebuilt on every render. -->
-      <section id="huntStage" class="stage" hidden>
-        <div class="viewer">
-          <div id="huntPano" class="pano"></div>
-          <div class="viewer-tools">
-            <button type="button" id="randomBtn" class="small sign">Zufälliger Ort</button>
-            <button type="button" id="mapToggle" class="small">Karte</button>
-          </div>
-          <div id="miniMapWrap" class="minimap" hidden>
-            <div id="miniMap"></div>
-            <p class="hint">Auf die Karte tippen, um dorthin zu springen.</p>
-          </div>
-        </div>
-        <aside id="huntSide" class="side"></aside>
-      </section>
-
-      <section id="reviewStage" class="stage" hidden>
-        <div class="viewer">
-          <div id="reviewPano" class="pano"></div>
-          <div id="reviewEmpty" class="pano-empty" hidden>Diesen Begriff hat niemand gefunden.</div>
-        </div>
-        <aside id="reviewSide" class="side"></aside>
-      </section>
     </main>
   </div>
   <script type="module" src="app.js"></script>
